@@ -10,7 +10,7 @@ const errorMessage=error=>{
  const text=error.message||'通信に失敗しました';
  if(/Invalid login credentials/.test(text))return 'メールアドレスまたはパスワードを確認してください。';
  if(error.code==='email_address_not_authorized')return '現在、確認メールを一般のメールアドレスに送信できない設定です。運営側でSupabaseのSMTP設定が必要です。';
- if(/Email not confirmed/.test(text))return '確認メールのリンクで認証してからログインしてください。';
+ if(/Email not confirmed/.test(text))return '以前の登録が確認待ちになっています。運営者によるアカウント状態の変更が必要です。';
  if(/rate.limit|too many|429/i.test(text))return '操作が集中しています。しばらく待ってからお試しください。';
  if(/email.*not.*authorized|email_address_not_authorized/i.test(text))return 'メール送信先が制限されています。運営側でメール送信設定が必要です。';
  if(/duplicate key/i.test(text))return 'このURLは登録済みです。';
@@ -101,9 +101,10 @@ $('authForm').addEventListener('submit',async e=>{
  e.preventDefault();$('authSubmit').disabled=true;$('authMessage').textContent='確認中…';
  const email=$('email').value.trim(),password=$('password').value;
  try{
+ if(mode==='signup'){const settings=await request('/auth/v1/settings');if(!settings.mailer_autoconfirm)throw new Error('メール確認なしの新規登録がまだ有効になっていません。運営者がSupabaseのConfirm emailをOFFにする必要があります。');}
  const path=mode==='signup'?'/auth/v1/signup':'/auth/v1/token?grant_type=password';
  const data=await request(path,{method:'POST',body:{email,password}});
- if(!data.access_token){$('authMessage').textContent='確認メールを送信しました。メールのリンクで認証後、この画面に戻ってログインしてください。';$('password').value='';return;}
+ if(!data.access_token)throw new Error('登録後のログイン情報を取得できませんでした。メール確認なしの設定になっているか、運営者にご確認ください。');
  generation++;acceptSession(data);await showDashboard();
  }catch(e){$('authMessage').textContent=errorMessage(e);}finally{$('authSubmit').disabled=false;}
 });
@@ -128,7 +129,7 @@ $('servicesList').addEventListener('click',async e=>{
 $('cancelDelete').addEventListener('click',()=>$('deleteDialog').close());
 $('confirmDelete').addEventListener('click',async()=>{const epoch=generation;$('confirmDelete').disabled=true;try{await db('pulse_monitors?id=eq.'+pendingDelete,{method:'DELETE'});if(epoch!==generation)return;$('deleteDialog').close();await refresh();}catch(e){$('deleteMessage').textContent=errorMessage(e);}finally{$('confirmDelete').disabled=false;}});
 async function emailAction(kind){const input=$('email');if(!input.reportValidity())return;const button=$(kind==='resend'?'resend':'recover');button.disabled=true;try{await request('/auth/v1/'+kind,{method:'POST',body:kind==='resend'?{type:'signup',email:input.value.trim()}:{email:input.value.trim()}});$('authMessage').textContent='該当するアカウントがある場合、メールが送信されます。受信箱をご確認ください。';}catch(e){$('authMessage').textContent=errorMessage(e);}finally{button.disabled=false;}}
-$('resend').addEventListener('click',()=>emailAction('resend'));$('recover').addEventListener('click',()=>emailAction('recover'));
+$('recover').addEventListener('click',()=>emailAction('recover'));
 $('verifyRecovery').addEventListener('click',async()=>{const button=$('verifyRecovery');button.disabled=true;try{const link=new URL($('recoveryLink').value.trim());if(link.origin!==API||link.pathname!=='/auth/v1/verify'||link.searchParams.get('type')!=='recovery')throw new Error('このサービスのパスワード再設定メール内のリンクを入力してください。');const hash=link.searchParams.get('token');if(!hash)throw new Error('リンクに認証情報がありません。');const data=await request('/auth/v1/verify',{method:'POST',body:{token_hash:hash,type:'recovery'}});generation++;acceptSession(data);$('recoveryLink').value='';$('passwordDialog').showModal();}catch(e){$('authMessage').textContent=errorMessage(e);}finally{button.disabled=false;}});
 $('passwordForm').addEventListener('submit',async e=>{e.preventDefault();$('savePassword').disabled=true;try{await request('/auth/v1/user',{method:'PUT',token:await token(),body:{password:$('newPassword').value}});$('passwordDialog').close();$('newPassword').value='';await showDashboard();}catch(e){$('passwordMessage').textContent=errorMessage(e);}finally{$('savePassword').disabled=false;}});
 $('cancelPassword').addEventListener('click',()=>clearSession('パスワード再設定をキャンセルしました。'));
