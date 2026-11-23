@@ -2,7 +2,7 @@
 const base=Deno.env.get('SUPABASE_URL')!;
 const key=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const origins=new Set(['https://pulse-9y2u.onrender.com','https://morigu812-svg.github.io']);
-const actions=new Set(['health','signup','login','recover','me','logout','list_monitors','save_monitor','delete_monitor']);
+const actions=new Set(['health','signup','login','recover','me','logout','list_monitors','save_monitor','delete_monitor','renew_recovery']);
 function headers(origin:string|null){
  const h=new Headers({'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store, private','X-Content-Type-Options':'nosniff','Vary':'Origin'});
  if(origin&&origins.has(origin))h.set('Access-Control-Allow-Origin',origin);

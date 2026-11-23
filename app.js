@@ -43,15 +43,55 @@ async function pulse(action,input={},protectedRequest=true){
  const epoch=generation;
  if(protectedRequest&&(!session||session.expires_at<=Date.now())){clearSession('PULSEにログインしてください。');throw new Error('PULSEにログインしてください。');}
  try{return await request('/functions/v1/pulse-api',{method:'POST',body:{action,input},token:protectedRequest?session.access_token:undefined});}
- catch(e){if(protectedRequest&&epoch===generation&&e.status===401)clearSession('ログインの有効期限が切れました。再度ログインしてください。');throw e;}
+ catch(e){if(protectedRequest&&epoch===generation&&e.status===401&&e.code==='session_expired')clearSession('ログインの有効期限が切れました。再度ログインしてください。');throw e;}
 }
-function showRecovery(code){if(!code)return;$('recoveryCode').textContent=code;$('recoveryCopyMessage').textContent='';$('recoveryDialog').showModal();}
+const RECOVERY_STORE='pulse.pending-recovery.v1';
+const recoveryBindings=new WeakSet();
+function recoveryDialog(){
+ let dialog=$('recoveryDialog');
+ if(!dialog){dialog=document.createElement('dialog');dialog.id='recoveryDialog';dialog.setAttribute('aria-labelledby','recoveryTitle');document.body.append(dialog);}
+ if(!$('recoveryCode')||!$('recoveryCopyMessage')||!$('copyRecovery')||!$('closeRecovery')){
+  // Static markup only: secret values are assigned with textContent below.
+  dialog.innerHTML='<h2 id="recoveryTitle">復旧コードを保存してください</h2><p>パスワードの再設定に使います。安全な場所に保存してください。</p><div id="recoveryCode" class="recovery-code"></div><button id="copyRecovery" type="button">コピーする</button><p id="recoveryCopyMessage" role="status"></p><button id="closeRecovery" type="button" class="primary">保存したので閉じる</button>';
+ }
+ if(!recoveryBindings.has(dialog)){
+  dialog.addEventListener('click',async e=>{
+   const button=e.target.closest('button');if(!button)return;
+   if(button.id==='closeRecovery'){
+    try{sessionStorage.removeItem(RECOVERY_STORE);}catch{}
+    if($('recoveryCode'))$('recoveryCode').textContent='';
+    if(typeof dialog.close==='function')dialog.close();else dialog.removeAttribute('open');
+   }else if(button.id==='copyRecovery'){
+    const code=$('recoveryCode')?.textContent||'';
+    try{await navigator.clipboard.writeText(code);$('recoveryCopyMessage').textContent='コピーしました。安全な場所に保存してください。';}
+    catch{if($('recoveryCopyMessage'))$('recoveryCopyMessage').textContent='コードを長押し・選択してコピーしてください。';}
+   }
+  });
+  dialog.addEventListener('cancel',e=>{e.preventDefault();if($('recoveryCopyMessage'))$('recoveryCopyMessage').textContent='復旧コードを保存してから閉じてください。';});
+  recoveryBindings.add(dialog);
+ }
+ return dialog;
+}
+function showRecovery(code){
+ if(!/^[a-f0-9]{32}$/.test(code||''))return;
+ try{sessionStorage.setItem(RECOVERY_STORE,JSON.stringify({account_id:session?.user?.id,code}));}catch{}
+ try{
+  const dialog=recoveryDialog();$('recoveryCode').textContent=code;$('recoveryCopyMessage').textContent='';
+  if(!dialog.open){if(typeof dialog.showModal==='function')dialog.showModal();else dialog.setAttribute('open','');}
+ }catch{
+  // A recovery popup failure must never turn successful registration into a login failure.
+  if($('authMessage'))$('authMessage').textContent='登録は完了しました。復旧コードの表示に失敗したため、再読み込みしてください。';
+ }
+}
+function restoreRecovery(){
+ try{const saved=JSON.parse(sessionStorage.getItem(RECOVERY_STORE)||'null');if(saved?.account_id===session?.user?.id)showRecovery(saved.code);}catch{}
+}
 function clearSession(message=''){
  generation++;session=null;rows=[];persist();$('dashboard').hidden=true;$('authScreen').hidden=false;
  $('servicesList').replaceChildren();$('eventRows').replaceChildren();$('userEmail').textContent='';
  for(const id of ['count','healthy','down','latency','uptime'])$(id).textContent='—';
- for(const id of ['siteDialog','deleteDialog','recoveryDialog'])if($(id).open)$(id).close();
- $('recoveryCode').textContent='';$('authMessage').textContent=message;
+ for(const id of ['siteDialog','deleteDialog','recoveryDialog','renewRecoveryDialog']){const dialog=$(id);if(dialog?.open){if(typeof dialog.close==='function')dialog.close();else dialog.removeAttribute('open');}}
+ if($('recoveryCode'))$('recoveryCode').textContent='';try{sessionStorage.removeItem(RECOVERY_STORE);}catch{}$('authMessage').textContent=message;
 }
 function markNotice(message,error=false){$('notice').textContent=message;$('notice').className='notice'+(error?' error':'');}
 function render(){
@@ -117,14 +157,18 @@ $('servicesList').addEventListener('click',async e=>{
 });
 $('cancelDelete').addEventListener('click',()=>$('deleteDialog').close());
 $('confirmDelete').addEventListener('click',async()=>{const epoch=generation;$('confirmDelete').disabled=true;try{await pulse('delete_monitor',{id:pendingDelete});if(epoch!==generation)return;$('deleteDialog').close();await refresh();}catch(e){$('deleteMessage').textContent=errorMessage(e);}finally{$('confirmDelete').disabled=false;}});
-$('recoveryForm').addEventListener('submit',async e=>{
+$('recoveryForm')?.addEventListener('submit',async e=>{
  e.preventDefault();const button=$('recoverAccount');button.disabled=true;$('recoverMessage').textContent='再設定中…';
  try{const data=await pulse('recover',{email:$('recoverEmail').value.trim(),recovery_code:$('recoverCode').value.trim(),password:$('recoverPassword').value},false);generation++;acceptSession(data);$('recoveryForm').reset();showRecovery(data.recovery_code);await showDashboard();}
  catch(e){$('recoverMessage').textContent=errorMessage(e);}finally{button.disabled=false;}
 });
-$('closeRecovery').addEventListener('click',()=>{$('recoveryCode').textContent='';$('recoveryDialog').close();});
-$('recoveryDialog').addEventListener('cancel',e=>{e.preventDefault();$('recoveryCopyMessage').textContent='復旧コードを保存してから閉じてください。';});
-$('copyRecovery').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('recoveryCode').textContent);$('recoveryCopyMessage').textContent='コピーしました。安全な場所に保存してください。';}catch{$('recoveryCopyMessage').textContent='コードを長押し・選択してコピーしてください。';}});
+$('renewRecovery')?.addEventListener('click',()=>{$('renewRecoveryForm').reset();$('renewRecoveryMessage').textContent='';$('renewRecoveryDialog').showModal();});
+$('cancelRenewRecovery')?.addEventListener('click',()=>$('renewRecoveryDialog').close());
+$('renewRecoveryForm')?.addEventListener('submit',async e=>{
+ e.preventDefault();const button=$('confirmRenewRecovery');button.disabled=true;
+ try{const data=await pulse('renew_recovery',{password:$('renewRecoveryPassword').value});$('renewRecoveryPassword').value='';$('renewRecoveryDialog').close();showRecovery(data.recovery_code);}
+ catch(e){$('renewRecoveryMessage').textContent=errorMessage(e);}finally{button.disabled=false;}
+});
 document.querySelectorAll('.nav').forEach(link=>link.addEventListener('click',()=>document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('active',n===link))));
 function tick(){$('clock').textContent=new Intl.DateTimeFormat('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date())+' JST';}
 setInterval(tick,1000);tick();setInterval(()=>{if(!document.hidden)refresh();},60000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
@@ -132,8 +176,8 @@ setInterval(tick,1000);tick();setInterval(()=>{if(!document.hidden)refresh();},6
  // Discard only legacy PULSE sessions; never touch another application's account.
  try{sessionStorage.removeItem('pulse.auth.session.v1');}catch{}
  const stored=sessionStorage.getItem(STORE);if(stored)session=JSON.parse(stored);
- if(session)await showDashboard();
- }catch(e){clearSession('PULSEにログインしてください。'+errorMessage(e));}})();
+ if(session){await showDashboard();restoreRecovery();}
+ }catch(e){if(e.status===401||e.code==='session_expired')clearSession('PULSEにログインしてください。'+errorMessage(e));else{$('authMessage').textContent=errorMessage(e);restoreRecovery();}}})();
 
 $('connectionTest').addEventListener('click',async()=>{
  const button=$('connectionTest');button.disabled=true;$('authMessage').textContent='認証サーバーへの接続を確認中…';

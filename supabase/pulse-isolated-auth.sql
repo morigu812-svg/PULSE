@@ -119,6 +119,18 @@ begin
   delete from pulse_private.sessions where token_hash=encode(extensions.digest(p_token,'sha256'),'hex');
   return jsonb_build_object('status',200,'ok',true);
  end if;
+ if p_action='renew_recovery' then
+  if not pulse_private.consume_rate('renew:'||v_account.id::text,5,900) then
+   return jsonb_build_object('status',429,'error','試行回数が多いため、15分ほど待ってください。','code','rate_limited');
+  end if;
+  select * into v_account from pulse_private.accounts where id=v_account.id for update;
+  if char_length(v_password) not between 8 and 128 or extensions.crypt(encode(extensions.digest(v_password,'sha256'),'hex'),v_account.password_hash) is distinct from v_account.password_hash then
+   return jsonb_build_object('status',401,'error','PULSEのパスワードを確認してください。','code','invalid_password');
+  end if;
+  v_recovery:=encode(extensions.gen_random_bytes(16),'hex');
+  update pulse_private.accounts set recovery_hash=encode(extensions.digest(v_recovery,'sha256'),'hex') where id=v_account.id;
+  return jsonb_build_object('status',200,'recovery_code',v_recovery);
+ end if;
  if p_action='list_monitors' then
   select coalesce(jsonb_agg(to_jsonb(m) order by m.created_at),'[]'::jsonb) into v_result from pulse_private.monitors m where owner_id=v_account.id;
   return jsonb_build_object('status',200,'monitors',v_result);
