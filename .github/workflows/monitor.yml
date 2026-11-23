@@ -1,0 +1,50 @@
+name: Monitor and publish PULSE
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '*/5 * * * *'
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: pulse-monitor
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check public endpoints
+        run: python scripts/check.py
+      - name: Save monitoring history
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/status.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update PULSE monitoring data [skip ci]'
+            git push
+          fi
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - name: Prepare website
+        run: |
+          mkdir -p _site/data
+          cp index.html styles.css app.js favicon.svg .nojekyll _site/
+          cp data/status.json _site/data/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - name: Deploy GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
