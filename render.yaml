@@ -6,7 +6,18 @@ services:
     branch: main
     buildCommand: ""
     staticPublishPath: .
+    routes:
+      - type: rewrite
+        source: /pulse-api/*
+        destination: https://bskmgytpfhmjhrclcohf.supabase.co/*
     headers:
+      - path: /pulse-api/*
+        name: Cache-Control
+        value: no-store, private
+      - path: /pulse-api/*
+        name: Vary
+        value: Authorization, apikey
+
       - path: /*
         name: X-Content-Type-Options
         value: nosniff
@@ -18,4 +29,4 @@ services:
         value: DENY
       - path: /*
         name: Content-Security-Policy
-        value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://bskmgytpfhmjhrclcohf.supabase.co; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+        value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"

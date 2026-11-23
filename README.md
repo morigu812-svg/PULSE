@@ -21,6 +21,29 @@
 
 `config.js` に入るのは公開可能なSupabase URLとpublishable keyだけです。service role keyなどの秘密鍵を置かないでください。
 
+## 同じサイト内の中継で通信
+ブラウザは `/pulse-api/auth/v1/...` と `/pulse-api/rest/v1/...` へ接続します。
+Renderがサーバー側でSupabaseへ転送します。ブラウザからSupabaseへの直接通信や、失敗時の直接接続への切り替えは行いません。認証・RLSはそのまま適用されます。
+
+手動作成済みのStatic Siteには `render.yaml` の変更は自動適用されません。RenderのPULSEサービスで次の設定を追加してください。
+
+**Redirects/Rewrites**
+
+| Source | Destination | Action |
+| --- | --- | --- |
+| `/pulse-api/*` | `https://bskmgytpfhmjhrclcohf.supabase.co/*` | Rewrite |
+
+**Headers**
+
+| Path | Name | Value |
+| --- | --- | --- |
+| `/pulse-api/*` | `Cache-Control` | `no-store, private` |
+| `/pulse-api/*` | `Vary` | `Authorization, apikey` |
+
+既存の `/*` ルールがある場合は、`/pulse-api/*` のルールを先に置きます。ActionはRedirectではなくRewriteを選びます。新しいBlueprintから作成する場合は `render.yaml` に同じ設定を含めています。
+
+通信方式はHTTPSのままですが、ブラウザの接続先がPULSEの公開URLに統一されます。学校の管理ポリシーがPULSE自体や機能を制限している場合まで動作を保証するものではありません。
+
 ## 認証の運用設定
 Supabase Authは同じプロジェクト内の他アプリと共通ですが、PULSEのデータは専用テーブルとRLSで分離します。既存アプリの設定は変更していません。
 

@@ -1,6 +1,7 @@
 'use strict';
 const $=id=>document.getElementById(id);
 const {url:API,key:PUBLIC_KEY}=window.PULSE_CONFIG;
+const API_BASE=(window.PULSE_CONFIG.apiBase||API).replace(/\/$/,'');
 const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const time=value=>value?new Intl.DateTimeFormat('ja-JP',{timeZone:'Asia/Tokyo',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(value)):'—';
 let session=null,rows=[],mode='login',generation=0,refreshPromise=null,loading=false,pendingDelete=null;
@@ -22,7 +23,7 @@ function request(path,{method='GET',body,token,prefer}={}){
  return new Promise((resolve,reject)=>{
   const xhr=new XMLHttpRequest();
   const label=path.startsWith('/auth/v1/')?'認証サーバー':'データ保存先';
-  xhr.open(method,API+path,true);xhr.timeout=30000;xhr.withCredentials=false;
+  xhr.open(method,API_BASE+path,true);xhr.timeout=30000;xhr.withCredentials=false;
   xhr.setRequestHeader('apikey',PUBLIC_KEY);
   if(body!==undefined)xhr.setRequestHeader('Content-Type','application/json');
   if(token)xhr.setRequestHeader('Authorization','Bearer '+token);
@@ -33,8 +34,8 @@ function request(path,{method='GET',body,token,prefer}={}){
   xhr.onabort=()=>failure('通信が中断されました。［ABORTED］','aborted');
   xhr.onload=()=>{
    if(xhr.status===0)return failure(label+'との通信を完了できませんでした。［NETWORK］','network_error');
-   let data;try{data=xhr.responseText?JSON.parse(xhr.responseText):null;}catch{return failure('サーバーから正しい応答を取得できませんでした。［HTTP '+xhr.status+'］','invalid_response');}
-   if(xhr.status<200||xhr.status>=300){const error=new Error(data?.msg||data?.message||data?.error_description||data?.error||'HTTP '+xhr.status);error.status=xhr.status;error.code=data?.error_code||data?.code||'http_error';error.requestId=xhr.getResponseHeader('sb-request-id');return reject(error);}
+   let data;try{data=xhr.responseText?JSON.parse(xhr.responseText):null;}catch{return failure('中継先からJSON応答を取得できませんでした。RenderのRewrite設定を確認してください。［HTTP '+xhr.status+'］','invalid_response');}
+   if(xhr.status<200||xhr.status>=300){const error=new Error(xhr.status===404&&API_BASE.startsWith('/')?'PULSEの通信中継が未設定です。Renderに /pulse-api/* のRewriteを追加してください。':data?.msg||data?.message||data?.error_description||data?.error||'HTTP '+xhr.status);error.status=xhr.status;error.code=data?.error_code||data?.code||'http_error';error.requestId=xhr.getResponseHeader('sb-request-id');return reject(error);}
    resolve(data);
   };
   xhr.send(body===undefined?null:JSON.stringify(body));
@@ -143,7 +144,7 @@ setInterval(tick,1000);tick();setInterval(()=>{if(!document.hidden)refresh();},6
 
 $('connectionTest').addEventListener('click',async()=>{
  const button=$('connectionTest');button.disabled=true;$('authMessage').textContent='認証サーバーへの接続を確認中…';
- try{const settings=await request('/auth/v1/settings');if(!settings?.external)throw new Error('設定情報を取得できませんでした。');$('authMessage').textContent=settings.disable_signup?'接続は正常ですが、新規登録が無効になっています。':'認証サーバーへの接続は正常です。新規登録をもう一度お試しください。';}
+ try{const settings=await request('/auth/v1/settings');if(!settings?.external)throw new Error('設定情報を取得できませんでした。');$('authMessage').textContent=settings.disable_signup?'接続は正常ですが、新規登録が無効になっています。':'PULSEの通信中継への接続は正常です。新規登録をもう一度お試しください。';}
  catch(e){$('authMessage').textContent=errorMessage(e);}
  finally{button.disabled=false;}
 });
