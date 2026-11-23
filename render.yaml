@@ -16,7 +16,7 @@ services:
         value: no-store, private
       - path: /pulse-api/*
         name: Vary
-        value: Authorization, apikey
+        value: x-pulse-session, apikey
 
       - path: /*
         name: X-Content-Type-Options

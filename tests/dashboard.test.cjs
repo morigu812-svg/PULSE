@@ -20,8 +20,8 @@ test('monitor validation rejects custom domains, credentials and query strings',
 test('XHR auth requests preserve error details and never retry a failed mutation',async()=>{
  const{c}=app();let sent=0,latest;
  c.XMLHttpRequest=class {constructor(){latest=this;}open(method,url){this.method=method;this.url=url;}setRequestHeader(){}getResponseHeader(){return 'test-request';}send(){sent++;this.status=422;this.responseText=JSON.stringify({msg:'Email not allowed',error_code:'email_address_not_authorized'});this.onload();}};
- await assert.rejects(c.request('/auth/v1/signup',{method:'POST',body:{email:'test@example.invalid'}}),e=>e.status===422&&e.code==='email_address_not_authorized');assert.equal(sent,1);assert.equal(latest.timeout,30000);assert.equal(latest.withCredentials,false);
+ await assert.rejects(c.request('/functions/v1/pulse-api',{method:'POST',body:{email:'test@example.invalid'}}),e=>e.status===422&&e.code==='email_address_not_authorized');assert.equal(sent,1);assert.equal(latest.timeout,30000);assert.equal(latest.withCredentials,false);
  c.XMLHttpRequest=class {open(){}setRequestHeader(){}send(){sent++;this.onerror();}};
- await assert.rejects(c.request('/auth/v1/signup',{method:'POST',body:{}}),e=>e.code==='network_error');assert.equal(sent,2);
+ await assert.rejects(c.request('/functions/v1/pulse-api',{method:'POST',body:{}}),e=>e.code==='network_error');assert.equal(sent,2);
 });
-test('XHR connection test reads settings without cookies',async()=>{const{c}=app();c.XMLHttpRequest=class{open(){}setRequestHeader(){}send(){assert.equal(this.withCredentials,false);this.status=200;this.responseText='{"external":{"email":true}}';this.onload();}};const settings=await c.request('/auth/v1/settings');assert.equal(settings.external.email,true);});
+test('XHR connection test reads settings without cookies',async()=>{const{c}=app();c.XMLHttpRequest=class{open(){}setRequestHeader(){}send(){assert.equal(this.withCredentials,false);this.status=200;this.responseText='{"external":{"email":true}}';this.onload();}};const settings=await c.request('/functions/v1/pulse-api');assert.equal(settings.external.email,true);});

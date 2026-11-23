@@ -1,4 +1,5 @@
-// Public browser configuration. Privileged keys must never be added here.
+// Public browser configuration. PULSE uses its own accounts, not Supabase Auth.
+// Privileged keys must never be added here.
 window.PULSE_CONFIG = Object.freeze({
  apiBase:'/pulse-api',
  url:'https://bskmgytpfhmjhrclcohf.supabase.co',

@@ -4,29 +4,25 @@ const {url:API,key:PUBLIC_KEY}=window.PULSE_CONFIG;
 const API_BASE=(window.PULSE_CONFIG.apiBase||API).replace(/\/$/,'');
 const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const time=value=>value?new Intl.DateTimeFormat('ja-JP',{timeZone:'Asia/Tokyo',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(value)):'—';
-let session=null,rows=[],mode='login',generation=0,refreshPromise=null,loading=false,pendingDelete=null;
-const STORE='pulse.auth.session.v1';
+let session=null,rows=[],mode='login',generation=0,loading=false,pendingDelete=null;
+const STORE='pulse.isolated.session.v2';
 const errorMessage=error=>{
  const text=error.message||'通信に失敗しました';
- if(/Invalid login credentials/.test(text))return 'メールアドレスまたはパスワードを確認してください。';
- if(error.code==='email_address_not_authorized')return '現在、確認メールを一般のメールアドレスに送信できない設定です。運営側でSupabaseのSMTP設定が必要です。';
- if(/Email not confirmed/.test(text))return '以前の登録が確認待ちになっています。運営者によるアカウント状態の変更が必要です。';
  if(/rate.limit|too many|429/i.test(text))return '操作が集中しています。しばらく待ってからお試しください。';
- if(/email.*not.*authorized|email_address_not_authorized/i.test(text))return 'メール送信先が制限されています。運営側でメール送信設定が必要です。';
  if(/duplicate key/i.test(text))return 'このURLは登録済みです。';
  if(/check constraint.*url/i.test(text))return '対応する公開HTTPS URLを入力してください。';
  return text.slice(0,200)+(error.status?' ［HTTP '+error.status+' / '+(error.code||'error')+'］':'');
 };
 function request(path,{method='GET',body,token,prefer}={}){
- // Use the browser's XHR transport, which avoids Safari-specific fetch failures.
- // Mutations are sent once: an ambiguous network failure must not resend signup emails.
+ // All requests use the same-origin PULSE relay.
+ // Mutations are sent once; do not retry account creation after an ambiguous failure.
  return new Promise((resolve,reject)=>{
   const xhr=new XMLHttpRequest();
-  const label=path.startsWith('/auth/v1/')?'認証サーバー':'データ保存先';
+  const label='PULSEサーバー';
   xhr.open(method,API_BASE+path,true);xhr.timeout=30000;xhr.withCredentials=false;
   xhr.setRequestHeader('apikey',PUBLIC_KEY);
   if(body!==undefined)xhr.setRequestHeader('Content-Type','application/json');
-  if(token)xhr.setRequestHeader('Authorization','Bearer '+token);
+  if(token)xhr.setRequestHeader('x-pulse-session',token);
   if(prefer)xhr.setRequestHeader('Prefer',prefer);
   const failure=(message,code)=>{const error=new Error(message);error.code=code;reject(error);};
   xhr.onerror=()=>failure(label+'に接続できませんでした。通信回線・コンテンツブロッカーを確認して、接続確認をお試しください。［NETWORK］','network_error');
@@ -42,24 +38,20 @@ function request(path,{method='GET',body,token,prefer}={}){
  });
 }
 function persist(){try{if(session)sessionStorage.setItem(STORE,JSON.stringify(session));else sessionStorage.removeItem(STORE);}catch{/* Private browsing may disallow storage. */}}
-function acceptSession(data){if(!data?.access_token)throw new Error('ログイン情報を取得できませんでした。');session={access_token:data.access_token,refresh_token:data.refresh_token,expires_at:Date.now()+(data.expires_in||3600)*1000,user:data.user};persist();}
+function acceptSession(data){if(!data?.access_token||!/^[a-f0-9]{64}$/.test(data.access_token))throw new Error('PULSEのログイン情報を取得できませんでした。');session={access_token:data.access_token,expires_at:Date.now()+(data.expires_in||604800)*1000,user:data.user};persist();}
+async function pulse(action,input={},protectedRequest=true){
+ const epoch=generation;
+ if(protectedRequest&&(!session||session.expires_at<=Date.now())){clearSession('PULSEにログインしてください。');throw new Error('PULSEにログインしてください。');}
+ try{return await request('/functions/v1/pulse-api',{method:'POST',body:{action,input},token:protectedRequest?session.access_token:undefined});}
+ catch(e){if(protectedRequest&&epoch===generation&&e.status===401)clearSession('ログインの有効期限が切れました。再度ログインしてください。');throw e;}
+}
+function showRecovery(code){if(!code)return;$('recoveryCode').textContent=code;$('recoveryCopyMessage').textContent='';$('recoveryDialog').showModal();}
 function clearSession(message=''){
  generation++;session=null;rows=[];persist();$('dashboard').hidden=true;$('authScreen').hidden=false;
  $('servicesList').replaceChildren();$('eventRows').replaceChildren();$('userEmail').textContent='';
  for(const id of ['count','healthy','down','latency','uptime'])$(id).textContent='—';
- for(const id of ['siteDialog','deleteDialog','passwordDialog'])if($(id).open)$(id).close();
- $('authMessage').textContent=message;
-}
-async function token(force=false){
- if(!session)throw new Error('ログインしてください。');
- if(!force&&session.expires_at>Date.now()+60000)return session.access_token;
- if(!refreshPromise){const epoch=generation;refreshPromise=(async()=>{try{const data=await request('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:{refresh_token:session.refresh_token}});if(epoch!==generation)throw new Error('セッションが変更されました。');acceptSession(data);return session.access_token;}catch(e){if(epoch===generation&&[400,401,403].includes(e.status))clearSession('ログインの有効期限が切れました。再度ログインしてください。');throw e;}finally{refreshPromise=null;}})();}
- return refreshPromise;
-}
-async function db(path,options={}){
- const epoch=generation;
- try{return await request('/rest/v1/'+path,{...options,token:await token()});}
- catch(e){if(e.status!==401||epoch!==generation)throw e;return request('/rest/v1/'+path,{...options,token:await token(true)});}
+ for(const id of ['siteDialog','deleteDialog','recoveryDialog'])if($(id).open)$(id).close();
+ $('recoveryCode').textContent='';$('authMessage').textContent=message;
 }
 function markNotice(message,error=false){$('notice').textContent=message;$('notice').className='notice'+(error?' error':'');}
 function render(){
@@ -87,12 +79,12 @@ function render(){
 }
 async function refresh(){
  if(!session||loading)return;loading=true;const epoch=generation;$('refresh').disabled=true;
- try{const data=await db('pulse_monitors?select=*&order=created_at.asc');if(epoch!==generation)return;rows=data;render();}
+ try{const data=await pulse('list_monitors');if(epoch!==generation)return;rows=data.monitors;render();}
  catch(e){if(epoch===generation&&session){$('liveState').textContent='● 接続失敗';markNotice(errorMessage(e)+' 最後に取得した結果を表示しています。',true);}}
  finally{loading=false;$('refresh').disabled=false;}
 }
 async function showDashboard(){
- const epoch=generation;const user=await request('/auth/v1/user',{token:await token()});if(epoch!==generation)return;
+ const epoch=generation;const result=await pulse('me');const user=result.user;if(epoch!==generation)return;
  session.user=user;persist();$('authScreen').hidden=true;$('dashboard').hidden=false;$('userEmail').textContent=user.email||'マイダッシュボード';$('password').value='';await refresh();
 }
 function setMode(next){mode=next;$('loginTab').classList.toggle('primary',mode==='login');$('signupTab').classList.toggle('primary',mode==='signup');$('loginTab').setAttribute('aria-pressed',String(mode==='login'));$('signupTab').setAttribute('aria-pressed',String(mode==='signup'));$('authSubmit').textContent=mode==='login'?'ログイン':'アカウントを作成';$('password').autocomplete=mode==='login'?'current-password':'new-password';$('authMessage').textContent='';}
@@ -101,14 +93,11 @@ $('authForm').addEventListener('submit',async e=>{
  e.preventDefault();$('authSubmit').disabled=true;$('authMessage').textContent='確認中…';
  const email=$('email').value.trim(),password=$('password').value;
  try{
- if(mode==='signup'){const settings=await request('/auth/v1/settings');if(!settings.mailer_autoconfirm)throw new Error('メール確認なしの新規登録がまだ有効になっていません。運営者がSupabaseのConfirm emailをOFFにする必要があります。');}
- const path=mode==='signup'?'/auth/v1/signup':'/auth/v1/token?grant_type=password';
- const data=await request(path,{method:'POST',body:{email,password}});
- if(!data.access_token)throw new Error('登録後のログイン情報を取得できませんでした。メール確認なしの設定になっているか、運営者にご確認ください。');
- generation++;acceptSession(data);await showDashboard();
+ const data=await pulse(mode==='signup'?'signup':'login',{email,password},false);
+ generation++;acceptSession(data);showRecovery(data.recovery_code);await showDashboard();
  }catch(e){$('authMessage').textContent=errorMessage(e);}finally{$('authSubmit').disabled=false;}
 });
-$('logout').addEventListener('click',async()=>{const oldToken=session?.access_token;clearSession();if(oldToken)try{await request('/auth/v1/logout?scope=local',{method:'POST',token:oldToken});}catch{}});
+$('logout').addEventListener('click',async()=>{const oldToken=session?.access_token;clearSession();if(oldToken)try{await request('/functions/v1/pulse-api',{method:'POST',body:{action:'logout',input:{}},token:oldToken});}catch{}});
 $('refresh').addEventListener('click',refresh);
 for(const id of ['search','filter'])$(id).addEventListener('input',render);
 function openEditor(row){$('siteForm').reset();$('siteId').value=row?.id||'';$('siteName').value=row?.name||'';$('siteUrl').value=row?.url||'';$('siteEnabled').checked=row?.enabled??true;$('siteTitle').textContent=row?'監視サイトを編集':'サイトを追加';$('siteMessage').textContent='';$('siteDialog').showModal();}
@@ -117,35 +106,38 @@ function validateUrl(raw){const u=new URL(raw);if(u.protocol!=='https:'||u.port|
 $('siteForm').addEventListener('submit',async e=>{
  e.preventDefault();$('saveSite').disabled=true;$('siteMessage').textContent='保存中…';const epoch=generation;
  try{const id=$('siteId').value;const body={name:$('siteName').value.trim(),url:validateUrl($('siteUrl').value.trim()),enabled:$('siteEnabled').checked};if(!body.name)throw new Error('サイト名を入力してください。');
- const changed=await db('pulse_monitors'+(id?'?id=eq.'+encodeURIComponent(id):''),{method:id?'PATCH':'POST',body,prefer:'return=representation'});if(epoch!==generation)return;if(!changed?.length)throw new Error('保存対象が見つかりません。再読み込みしてください。');$('siteDialog').close();await refresh();
+ const changed=await pulse('save_monitor',{...body,...(id?{id}:{})});if(epoch!==generation)return;if(!changed?.monitor)throw new Error('保存対象が見つかりません。再読み込みしてください。');$('siteDialog').close();await refresh();
  }catch(e){if(epoch===generation)$('siteMessage').textContent=errorMessage(e);}finally{$('saveSite').disabled=false;}
 });
 $('servicesList').addEventListener('click',async e=>{
  const button=e.target.closest('button[data-action]');if(!button)return;const row=rows.find(r=>r.id===button.dataset.id);if(!row)return;
  if(button.dataset.action==='edit')return openEditor(row);
  if(button.dataset.action==='delete'){pendingDelete=row.id;$('deleteName').textContent=row.name;$('deleteMessage').textContent='';return $('deleteDialog').showModal();}
- button.disabled=true;try{await db('pulse_monitors?id=eq.'+row.id,{method:'PATCH',body:{enabled:!row.enabled}});await refresh();}catch(e){markNotice(errorMessage(e),true);button.disabled=false;}
+ button.disabled=true;try{await pulse('save_monitor',{id:row.id,enabled:!row.enabled});await refresh();}catch(e){markNotice(errorMessage(e),true);button.disabled=false;}
 });
 $('cancelDelete').addEventListener('click',()=>$('deleteDialog').close());
-$('confirmDelete').addEventListener('click',async()=>{const epoch=generation;$('confirmDelete').disabled=true;try{await db('pulse_monitors?id=eq.'+pendingDelete,{method:'DELETE'});if(epoch!==generation)return;$('deleteDialog').close();await refresh();}catch(e){$('deleteMessage').textContent=errorMessage(e);}finally{$('confirmDelete').disabled=false;}});
-async function emailAction(kind){const input=$('email');if(!input.reportValidity())return;const button=$(kind==='resend'?'resend':'recover');button.disabled=true;try{await request('/auth/v1/'+kind,{method:'POST',body:kind==='resend'?{type:'signup',email:input.value.trim()}:{email:input.value.trim()}});$('authMessage').textContent='該当するアカウントがある場合、メールが送信されます。受信箱をご確認ください。';}catch(e){$('authMessage').textContent=errorMessage(e);}finally{button.disabled=false;}}
-$('recover').addEventListener('click',()=>emailAction('recover'));
-$('verifyRecovery').addEventListener('click',async()=>{const button=$('verifyRecovery');button.disabled=true;try{const link=new URL($('recoveryLink').value.trim());if(link.origin!==API||link.pathname!=='/auth/v1/verify'||link.searchParams.get('type')!=='recovery')throw new Error('このサービスのパスワード再設定メール内のリンクを入力してください。');const hash=link.searchParams.get('token');if(!hash)throw new Error('リンクに認証情報がありません。');const data=await request('/auth/v1/verify',{method:'POST',body:{token_hash:hash,type:'recovery'}});generation++;acceptSession(data);$('recoveryLink').value='';$('passwordDialog').showModal();}catch(e){$('authMessage').textContent=errorMessage(e);}finally{button.disabled=false;}});
-$('passwordForm').addEventListener('submit',async e=>{e.preventDefault();$('savePassword').disabled=true;try{await request('/auth/v1/user',{method:'PUT',token:await token(),body:{password:$('newPassword').value}});$('passwordDialog').close();$('newPassword').value='';await showDashboard();}catch(e){$('passwordMessage').textContent=errorMessage(e);}finally{$('savePassword').disabled=false;}});
-$('cancelPassword').addEventListener('click',()=>clearSession('パスワード再設定をキャンセルしました。'));
+$('confirmDelete').addEventListener('click',async()=>{const epoch=generation;$('confirmDelete').disabled=true;try{await pulse('delete_monitor',{id:pendingDelete});if(epoch!==generation)return;$('deleteDialog').close();await refresh();}catch(e){$('deleteMessage').textContent=errorMessage(e);}finally{$('confirmDelete').disabled=false;}});
+$('recoveryForm').addEventListener('submit',async e=>{
+ e.preventDefault();const button=$('recoverAccount');button.disabled=true;$('recoverMessage').textContent='再設定中…';
+ try{const data=await pulse('recover',{email:$('recoverEmail').value.trim(),recovery_code:$('recoverCode').value.trim(),password:$('recoverPassword').value},false);generation++;acceptSession(data);$('recoveryForm').reset();showRecovery(data.recovery_code);await showDashboard();}
+ catch(e){$('recoverMessage').textContent=errorMessage(e);}finally{button.disabled=false;}
+});
+$('closeRecovery').addEventListener('click',()=>{$('recoveryCode').textContent='';$('recoveryDialog').close();});
+$('recoveryDialog').addEventListener('cancel',e=>{e.preventDefault();$('recoveryCopyMessage').textContent='復旧コードを保存してから閉じてください。';});
+$('copyRecovery').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('recoveryCode').textContent);$('recoveryCopyMessage').textContent='コピーしました。安全な場所に保存してください。';}catch{$('recoveryCopyMessage').textContent='コードを長押し・選択してコピーしてください。';}});
 document.querySelectorAll('.nav').forEach(link=>link.addEventListener('click',()=>document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('active',n===link))));
 function tick(){$('clock').textContent=new Intl.DateTimeFormat('ja-JP',{timeZone:'Asia/Tokyo',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date())+' JST';}
 setInterval(tick,1000);tick();setInterval(()=>{if(!document.hidden)refresh();},60000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
 (async()=>{try{
- const fragment=new URLSearchParams(location.hash.slice(1));
- if(fragment.has('access_token')){history.replaceState(null,'',location.pathname+location.search);acceptSession({access_token:fragment.get('access_token'),refresh_token:fragment.get('refresh_token'),expires_in:Number(fragment.get('expires_in')||3600)});if(fragment.get('type')==='recovery'){$('passwordDialog').showModal();return;}}
- else{const stored=sessionStorage.getItem(STORE);if(stored)session=JSON.parse(stored);}
+ // Discard only legacy PULSE sessions; never touch another application's account.
+ try{sessionStorage.removeItem('pulse.auth.session.v1');}catch{}
+ const stored=sessionStorage.getItem(STORE);if(stored)session=JSON.parse(stored);
  if(session)await showDashboard();
- }catch(e){clearSession('ログインしてください。'+errorMessage(e));}})();
+ }catch(e){clearSession('PULSEにログインしてください。'+errorMessage(e));}})();
 
 $('connectionTest').addEventListener('click',async()=>{
  const button=$('connectionTest');button.disabled=true;$('authMessage').textContent='認証サーバーへの接続を確認中…';
- try{const settings=await request('/auth/v1/settings');if(!settings?.external)throw new Error('設定情報を取得できませんでした。');$('authMessage').textContent=settings.disable_signup?'接続は正常ですが、新規登録が無効になっています。':'PULSEの通信中継への接続は正常です。新規登録をもう一度お試しください。';}
+ try{const result=await pulse('health',{},false);if(result.auth!=='pulse-isolated')throw new Error('PULSE専用認証へ接続できませんでした。');$('authMessage').textContent='PULSE専用認証への接続は正常です。My-Linksとは別のアカウントで利用できます。';}
  catch(e){$('authMessage').textContent=errorMessage(e);}
  finally{button.disabled=false;}
 });
