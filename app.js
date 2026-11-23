@@ -18,7 +18,7 @@ function render(payload) {
  $('down').textContent=String(down.length);
  $('latency').textContent=vals.length ? Math.round(vals.reduce((a,b)=>a+b,0)/vals.length)+' ms' : '—';
  $('updated').textContent=payload.updatedAt?'LAST CHECK '+formatTime(payload.updatedAt):'NO CHECKS YET';
- $('liveState').textContent=payload.configured?'● LIVE DATA':'● NOT CONFIGURED';
+ $('liveState').textContent=!payload.configured?'● NOT CONFIGURED':payload.updatedAt?'● LIVE DATA':'● PENDING';
  if(!payload.configured){ $('notice').className='notice demo';$('notice').textContent='初期設定が必要です。monitors.json に監視対象を登録してください。架空の稼働情報は表示していません。'; }
  else if(!payload.updatedAt){ $('notice').className='notice';$('notice').textContent='サイトの登録が完了しました。最初の自動チェックを待っています。実行には遅延する場合があります。'; }
  else { $('notice').className='notice';$('notice').textContent='実際の監視データを表示中。自動チェックは約5分間隔です。最終チェック：'+formatTime(payload.updatedAt); }
@@ -37,10 +37,10 @@ function render(payload) {
 async function refresh() {
  const button=$('refresh');button.disabled=true;
  try {const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),10000);let response;
- try {response=await fetch('./data/status.json',{cache:'no-store',signal:controller.signal});} finally {clearTimeout(timeout);}
+ try {response=await fetch('https://raw.githubusercontent.com/morigu812-svg/PULSE/main/data/status.json',{cache:'no-store',signal:controller.signal});} finally {clearTimeout(timeout);}
  if(!response.ok)throw new Error('API '+response.status);const data=await response.json();render(data);
  } catch(err){ $('liveState').textContent='● DISCONNECTED';$('notice').className='notice error';
- $('notice').textContent='監視APIへ接続できません。GitHub Actionsの実行状況を確認してください。（'+String(err.message).slice(0,80)+'）';
+ $('notice').textContent='監視結果を取得できません。GitHub Actionsの実行状況を確認してください。（'+String(err.message).slice(0,80)+'）';
  $('servicesList').innerHTML='<div class="empty">監視データを読み込めません</div>';
  } finally {button.disabled=false;}
 }
