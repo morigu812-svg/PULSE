@@ -131,6 +131,14 @@ begin
   update pulse_private.accounts set recovery_hash=encode(extensions.digest(v_recovery,'sha256'),'hex') where id=v_account.id;
   return jsonb_build_object('status',200,'recovery_code',v_recovery);
  end if;
+ if p_action='claim_checks' then
+  if not pulse_private.consume_rate('manual-check:'||v_account.id::text,1,30) then
+   return jsonb_build_object('status',429,'error','ステータス確認は30秒間隔で実行できます。少し待ってください。','code','check_rate_limited');
+  end if;
+  select coalesce(jsonb_agg(jsonb_build_object('id',id,'url',url)),'[]') into v_result
+   from pulse_private.monitors where owner_id=v_account.id and enabled;
+  return jsonb_build_object('status',200,'monitors',v_result);
+ end if;
  if p_action='list_monitors' then
   select coalesce(jsonb_agg(to_jsonb(m) order by m.created_at),'[]'::jsonb) into v_result from pulse_private.monitors m where owner_id=v_account.id;
   return jsonb_build_object('status',200,'monitors',v_result);
@@ -198,8 +206,20 @@ create or replace function public.pulse_record_check(p_id uuid,p_url text,p_poin
 begin
  update public.pulse_monitors m set
  points=(select coalesce(jsonb_agg(value order by ord),'[]') from (select value,ord from jsonb_array_elements(m.points||jsonb_build_array(p_point)) with ordinality e(value,ord) order by ord desc limit 288) recent),
- last_checked_at=(p_point->>'at')::timestamptz where id=p_id and url=p_url and enabled;
+ last_checked_at=(p_point->>'at')::timestamptz where id=p_id and url=p_url and enabled and (last_checked_at is null or last_checked_at<(p_point->>'at')::timestamptz);
  update pulse_private.monitors m set
  points=(select coalesce(jsonb_agg(value order by ord),'[]') from (select value,ord from jsonb_array_elements(m.points||jsonb_build_array(p_point)) with ordinality e(value,ord) order by ord desc limit 288) recent),
- last_checked_at=(p_point->>'at')::timestamptz where id=p_id and url=p_url and enabled;
+ last_checked_at=(p_point->>'at')::timestamptz where id=p_id and url=p_url and enabled and (last_checked_at is null or last_checked_at<(p_point->>'at')::timestamptz);
 end $$;
+
+-- Service-only write endpoint: browser callers cannot forge health results.
+create function public.pulse_record_batch(p_checks jsonb) returns void language plpgsql security invoker set search_path='' as $$
+declare item jsonb;
+begin
+ if jsonb_typeof(p_checks)<>'array' or jsonb_array_length(p_checks)>10 then raise exception 'Invalid check batch'; end if;
+ for item in select value from jsonb_array_elements(p_checks) loop
+  perform public.pulse_record_check((item->>'id')::uuid,item->>'url',item->'point');
+ end loop;
+end $$;
+revoke all on function public.pulse_record_batch(jsonb) from public,anon,authenticated;
+grant execute on function public.pulse_record_batch(jsonb) to service_role;

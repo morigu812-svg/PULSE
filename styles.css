@@ -5,3 +5,5 @@ body{font-size:16px}.brand strong{font-size:25px;letter-spacing:3px}.brand small
 .user-email{white-space:nowrap;display:block}
 
 .recovery-code{display:block;padding:16px;border:1px solid #34566c;border-radius:10px;background:#081320;color:var(--cyan);font-size:18px;overflow-wrap:anywhere;user-select:all;letter-spacing:1px}#recoveryForm{margin-top:18px}#recoverMessage{color:#ffbac5}#recoveryDialog p{font-size:16px;color:#abc0d4}
+
+.check-btn{white-space:nowrap;border-color:#2d6b75;color:var(--cyan)}.check-btn[aria-busy="true"]{opacity:.7;cursor:progress}

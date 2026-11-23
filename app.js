@@ -4,7 +4,7 @@ const {url:API,key:PUBLIC_KEY}=window.PULSE_CONFIG;
 const API_BASE=(window.PULSE_CONFIG.apiBase||API).replace(/\/$/,'');
 const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const time=value=>value?new Intl.DateTimeFormat('ja-JP',{timeZone:'Asia/Tokyo',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(value)):'—';
-let session=null,rows=[],mode='login',generation=0,loading=false,pendingDelete=null;
+let session=null,rows=[],mode='login',generation=0,loading=false,checking=false,pendingDelete=null;
 const STORE='pulse.isolated.session.v2';
 const errorMessage=error=>{
  const text=error.message||'通信に失敗しました';
@@ -13,20 +13,20 @@ const errorMessage=error=>{
  if(/check constraint.*url/i.test(text))return '対応する公開HTTPS URLを入力してください。';
  return text.slice(0,200)+(error.status?' ［HTTP '+error.status+' / '+(error.code||'error')+'］':'');
 };
-function request(path,{method='GET',body,token,prefer}={}){
+function request(path,{method='GET',body,token,prefer,timeoutMs=30000}={}){
  // All requests use the same-origin PULSE relay.
  // Mutations are sent once; do not retry account creation after an ambiguous failure.
  return new Promise((resolve,reject)=>{
   const xhr=new XMLHttpRequest();
   const label='PULSEサーバー';
-  xhr.open(method,API_BASE+path,true);xhr.timeout=30000;xhr.withCredentials=false;
+  xhr.open(method,API_BASE+path,true);xhr.timeout=timeoutMs;xhr.withCredentials=false;
   xhr.setRequestHeader('apikey',PUBLIC_KEY);
   if(body!==undefined)xhr.setRequestHeader('Content-Type','application/json');
   if(token)xhr.setRequestHeader('x-pulse-session',token);
   if(prefer)xhr.setRequestHeader('Prefer',prefer);
   const failure=(message,code)=>{const error=new Error(message);error.code=code;reject(error);};
   xhr.onerror=()=>failure(label+'に接続できませんでした。通信回線・コンテンツブロッカーを確認して、接続確認をお試しください。［NETWORK］','network_error');
-  xhr.ontimeout=()=>failure(label+'の応答が30秒以内に届きませんでした。しばらく待ってから再度お試しください。［TIMEOUT］','timeout');
+  xhr.ontimeout=()=>failure(label+'の応答が制限時間内に届きませんでした。しばらく待ってから再度お試しください。［TIMEOUT］','timeout');
   xhr.onabort=()=>failure('通信が中断されました。［ABORTED］','aborted');
   xhr.onload=()=>{
    if(xhr.status===0)return failure(label+'との通信を完了できませんでした。［NETWORK］','network_error');
@@ -42,7 +42,7 @@ function acceptSession(data){if(!data?.access_token||!/^[a-f0-9]{64}$/.test(data
 async function pulse(action,input={},protectedRequest=true){
  const epoch=generation;
  if(protectedRequest&&(!session||session.expires_at<=Date.now())){clearSession('PULSEにログインしてください。');throw new Error('PULSEにログインしてください。');}
- try{return await request('/functions/v1/pulse-api',{method:'POST',body:{action,input},token:protectedRequest?session.access_token:undefined});}
+ try{return await request('/functions/v1/pulse-api',{method:'POST',body:{action,input},token:protectedRequest?session.access_token:undefined,timeoutMs:action==='check_monitors'?60000:30000});}
  catch(e){if(protectedRequest&&epoch===generation&&e.status===401&&e.code==='session_expired')clearSession('ログインの有効期限が切れました。再度ログインしてください。');throw e;}
 }
 const RECOVERY_STORE='pulse.pending-recovery.v1';
@@ -118,7 +118,7 @@ function render(){
  $('addSite').disabled=all.length>=10;
 }
 async function refresh(){
- if(!session||loading)return;loading=true;const epoch=generation;$('refresh').disabled=true;
+ if(!session||loading||checking)return;loading=true;const epoch=generation;$('refresh').disabled=true;
  try{const data=await pulse('list_monitors');if(epoch!==generation)return;rows=data.monitors;render();}
  catch(e){if(epoch===generation&&session){$('liveState').textContent='● 接続失敗';markNotice(errorMessage(e)+' 最後に取得した結果を表示しています。',true);}}
  finally{loading=false;$('refresh').disabled=false;}
@@ -138,7 +138,18 @@ $('authForm').addEventListener('submit',async e=>{
  }catch(e){$('authMessage').textContent=errorMessage(e);}finally{$('authSubmit').disabled=false;}
 });
 $('logout').addEventListener('click',async()=>{const oldToken=session?.access_token;clearSession();if(oldToken)try{await request('/functions/v1/pulse-api',{method:'POST',body:{action:'logout',input:{}},token:oldToken});}catch{}});
-$('refresh').addEventListener('click',refresh);
+async function checkNow(){
+ if(!session||checking||loading)return;
+ const epoch=generation;checking=true;const button=$('refresh');button.disabled=true;button.textContent='確認中…';button.setAttribute('aria-busy','true');
+ markNotice('登録サイトへ接続して、最新のステータスを確認しています…');
+ try{
+  const result=await pulse('check_monitors');if(epoch!==generation)return;
+  rows=result.monitors;render();
+  markNotice(result.checked?result.checked+'件のサイトを確認し、ステータスと履歴を更新しました。':'監視中のサイトがありません。サイトを登録するか、一時停止を解除してください。');
+ }catch(e){if(epoch===generation&&session)markNotice(errorMessage(e),true);}
+ finally{checking=false;button.disabled=false;button.textContent='ステータス確認';button.setAttribute('aria-busy','false');}
+}
+$('refresh').addEventListener('click',checkNow);
 for(const id of ['search','filter'])$(id).addEventListener('input',render);
 function openEditor(row){$('siteForm').reset();$('siteId').value=row?.id||'';$('siteName').value=row?.name||'';$('siteUrl').value=row?.url||'';$('siteEnabled').checked=row?.enabled??true;$('siteTitle').textContent=row?'監視サイトを編集':'サイトを追加';$('siteMessage').textContent='';$('siteDialog').showModal();}
 $('addSite').addEventListener('click',()=>openEditor());$('closeDialog').addEventListener('click',()=>$('siteDialog').close());

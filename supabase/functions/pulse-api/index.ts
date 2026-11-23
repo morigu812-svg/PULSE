@@ -1,8 +1,9 @@
+import { checkSites } from './check.ts';
 // PULSE-specific authentication. No Supabase Auth account is created or modified.
 const base=Deno.env.get('SUPABASE_URL')!;
 const key=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const origins=new Set(['https://pulse-9y2u.onrender.com','https://morigu812-svg.github.io']);
-const actions=new Set(['health','signup','login','recover','me','logout','list_monitors','save_monitor','delete_monitor','renew_recovery']);
+const actions=new Set(['health','signup','login','recover','me','logout','list_monitors','save_monitor','delete_monitor','renew_recovery','check_monitors']);
 function headers(origin:string|null){
  const h=new Headers({'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store, private','X-Content-Type-Options':'nosniff','Vary':'Origin'});
  if(origin&&origins.has(origin))h.set('Access-Control-Allow-Origin',origin);
@@ -30,10 +31,29 @@ Deno.serve(async(req:Request)=>{
   const ip=(req.headers.get('x-forwarded-for')||req.headers.get('x-real-ip')||'unknown').split(',').at(-1)!.trim().slice(0,200);
   const response=await fetch(base+'/rest/v1/rpc/pulse_isolated_api',{
    method:'POST',headers:{apikey:key,Authorization:'Bearer '+key,'Content-Type':'application/json'},
-   body:JSON.stringify({p_action:body.action,p_input:body.input,p_token:token,p_ip:ip}),signal:AbortSignal.timeout(20000)
+   body:JSON.stringify({p_action:body.action==='check_monitors'?'claim_checks':body.action,p_input:body.input,p_token:token,p_ip:ip}),signal:AbortSignal.timeout(20000)
   });
   if(!response.ok){console.error('PULSE isolated API database status',response.status);return reply({error:'処理を完了できませんでした。しばらく待って再試行してください。',code:'server_error'},503);}
   const result=await response.json();const status=Number(result.status)||200;delete result.status;
+  if(body.action==='check_monitors'&&status===200){
+   const sites=result.monitors||[];
+   const checks=await checkSites(sites);
+   if(checks.length){
+    const saved=await fetch(base+'/rest/v1/rpc/pulse_record_batch',{
+     method:'POST',headers:{apikey:key,Authorization:'Bearer '+key,'Content-Type':'application/json'},
+     body:JSON.stringify({p_checks:checks}),signal:AbortSignal.timeout(15000)
+    });
+    if(!saved.ok)return reply({error:'確認結果を保存できませんでした。しばらく待って再試行してください。',code:'save_failed'},503);
+    await saved.text();
+   }
+   const latest=await fetch(base+'/rest/v1/rpc/pulse_isolated_api',{
+    method:'POST',headers:{apikey:key,Authorization:'Bearer '+key,'Content-Type':'application/json'},
+    body:JSON.stringify({p_action:'list_monitors',p_input:{},p_token:token,p_ip:ip}),signal:AbortSignal.timeout(15000)
+   });
+   if(!latest.ok)return reply({error:'確認は完了しましたが一覧を取得できませんでした。',code:'read_failed'},503);
+   const payload=await latest.json(),listStatus=Number(payload.status)||200;delete payload.status;
+   return reply({...payload,checked:checks.length},listStatus);
+  }
   return reply(result,status);
  }catch(e){const timeout=e instanceof DOMException&&['TimeoutError','AbortError'].includes(e.name);return reply({error:timeout?'処理が時間内に完了しませんでした。':'通信処理を完了できませんでした。',code:timeout?'timeout':'server_error'},503);}
 });
