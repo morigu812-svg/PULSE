@@ -8,21 +8,37 @@ const STORE='pulse.auth.session.v1';
 const errorMessage=error=>{
  const text=error.message||'通信に失敗しました';
  if(/Invalid login credentials/.test(text))return 'メールアドレスまたはパスワードを確認してください。';
+ if(error.code==='email_address_not_authorized')return '現在、確認メールを一般のメールアドレスに送信できない設定です。運営側でSupabaseのSMTP設定が必要です。';
  if(/Email not confirmed/.test(text))return '確認メールのリンクで認証してからログインしてください。';
  if(/rate.limit|too many|429/i.test(text))return '操作が集中しています。しばらく待ってからお試しください。';
  if(/email.*not.*authorized|email_address_not_authorized/i.test(text))return 'メール送信先が制限されています。運営側でメール送信設定が必要です。';
  if(/duplicate key/i.test(text))return 'このURLは登録済みです。';
  if(/check constraint.*url/i.test(text))return '対応する公開HTTPS URLを入力してください。';
- return text.slice(0,200);
+ return text.slice(0,200)+(error.status?' ［HTTP '+error.status+' / '+(error.code||'error')+'］':'');
 };
-async function request(path,{method='GET',body,token,prefer}={}){
- const headers={apikey:PUBLIC_KEY,'Content-Type':'application/json'};
- if(token)headers.Authorization='Bearer '+token;
- if(prefer)headers.Prefer=prefer;
- const response=await fetch(API+path,{method,headers,body:body===undefined?undefined:JSON.stringify(body),cache:'no-store',signal:AbortSignal.timeout(15000)});
- const text=await response.text();let data;try{data=text?JSON.parse(text):null;}catch{throw new Error('サーバーから正しい応答を取得できませんでした。');}
- if(!response.ok){const error=new Error(data?.msg||data?.message||data?.error_description||data?.error||'HTTP '+response.status);error.status=response.status;throw error;}
- return data;
+function request(path,{method='GET',body,token,prefer}={}){
+ // Use the browser's XHR transport, which avoids Safari-specific fetch failures.
+ // Mutations are sent once: an ambiguous network failure must not resend signup emails.
+ return new Promise((resolve,reject)=>{
+  const xhr=new XMLHttpRequest();
+  const label=path.startsWith('/auth/v1/')?'認証サーバー':'データ保存先';
+  xhr.open(method,API+path,true);xhr.timeout=30000;xhr.withCredentials=false;
+  xhr.setRequestHeader('apikey',PUBLIC_KEY);
+  if(body!==undefined)xhr.setRequestHeader('Content-Type','application/json');
+  if(token)xhr.setRequestHeader('Authorization','Bearer '+token);
+  if(prefer)xhr.setRequestHeader('Prefer',prefer);
+  const failure=(message,code)=>{const error=new Error(message);error.code=code;reject(error);};
+  xhr.onerror=()=>failure(label+'に接続できませんでした。通信回線・コンテンツブロッカーを確認して、接続確認をお試しください。［NETWORK］','network_error');
+  xhr.ontimeout=()=>failure(label+'の応答が30秒以内に届きませんでした。しばらく待ってから再度お試しください。［TIMEOUT］','timeout');
+  xhr.onabort=()=>failure('通信が中断されました。［ABORTED］','aborted');
+  xhr.onload=()=>{
+   if(xhr.status===0)return failure(label+'との通信を完了できませんでした。［NETWORK］','network_error');
+   let data;try{data=xhr.responseText?JSON.parse(xhr.responseText):null;}catch{return failure('サーバーから正しい応答を取得できませんでした。［HTTP '+xhr.status+'］','invalid_response');}
+   if(xhr.status<200||xhr.status>=300){const error=new Error(data?.msg||data?.message||data?.error_description||data?.error||'HTTP '+xhr.status);error.status=xhr.status;error.code=data?.error_code||data?.code||'http_error';error.requestId=xhr.getResponseHeader('sb-request-id');return reject(error);}
+   resolve(data);
+  };
+  xhr.send(body===undefined?null:JSON.stringify(body));
+ });
 }
 function persist(){try{if(session)sessionStorage.setItem(STORE,JSON.stringify(session));else sessionStorage.removeItem(STORE);}catch{/* Private browsing may disallow storage. */}}
 function acceptSession(data){if(!data?.access_token)throw new Error('ログイン情報を取得できませんでした。');session={access_token:data.access_token,refresh_token:data.refresh_token,expires_at:Date.now()+(data.expires_in||3600)*1000,user:data.user};persist();}
@@ -124,3 +140,10 @@ setInterval(tick,1000);tick();setInterval(()=>{if(!document.hidden)refresh();},6
  else{const stored=sessionStorage.getItem(STORE);if(stored)session=JSON.parse(stored);}
  if(session)await showDashboard();
  }catch(e){clearSession('ログインしてください。'+errorMessage(e));}})();
+
+$('connectionTest').addEventListener('click',async()=>{
+ const button=$('connectionTest');button.disabled=true;$('authMessage').textContent='認証サーバーへの接続を確認中…';
+ try{const settings=await request('/auth/v1/settings');if(!settings?.external)throw new Error('設定情報を取得できませんでした。');$('authMessage').textContent=settings.disable_signup?'接続は正常ですが、新規登録が無効になっています。':'認証サーバーへの接続は正常です。新規登録をもう一度お試しください。';}
+ catch(e){$('authMessage').textContent=errorMessage(e);}
+ finally{button.disabled=false;}
+});

@@ -6,7 +6,7 @@
  <div class="auth-card"><div class="auth-brand">⌁ PULSE</div><p class="eyebrow">YOUR PERSONAL COMMAND CENTER</p><h1 id="authTitle">自分だけの監視拠点。</h1><p class="lead">登録したサイトの状態と履歴を、あなた専用のダッシュボードで。</p>
  <div class="auth-tabs"><button type="button" id="loginTab" class="primary" aria-pressed="true">ログイン</button><button type="button" id="signupTab" aria-pressed="false">新規登録</button></div>
  <form id="authForm"><label for="email">メールアドレス</label><input id="email" type="email" autocomplete="username" required maxlength="254"><label for="password">パスワード</label><input id="password" type="password" autocomplete="current-password" required minlength="8" maxlength="128"><button id="authSubmit" class="primary" type="submit">ログイン</button></form>
- <p id="authMessage" role="status" class="auth-message"></p><p class="auth-hint">新規登録は8文字以上のパスワードを設定し、確認メールのリンクで認証してからログインしてください。認証後、この画面に戻ってログインできます。</p>
+ <p id="authMessage" role="status" class="auth-message"></p><button id="connectionTest" type="button">接続確認</button><p class="auth-hint">新規登録は8文字以上のパスワードを設定し、確認メールのリンクで認証してからログインしてください。認証後、この画面に戻ってログインできます。</p>
  <details><summary>確認メール・パスワード再設定</summary><button id="resend" type="button">確認メールを再送</button><button id="recover" type="button">再設定メールを送信</button><p class="auth-hint">メールが届かない場合は迷惑メールと送信元の設定をご確認ください。</p><label for="recoveryLink">再設定メールのリンク（移動できない場合）</label><input id="recoveryLink" type="url" placeholder="メール内のリンクを貼り付け"><button id="verifyRecovery" type="button">リンクを確認</button></details>
  </div>
 </section>
